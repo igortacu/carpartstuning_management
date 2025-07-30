@@ -359,11 +359,21 @@ function sameDay(a: string, b: string) {
   )
 }
 
+// inside Analytics.tsx, after you build filteredFactura…
+
 const tableRows = filteredFactura.map(f => {
-  const sold = soldItems.find(s =>
-    Number(s.stock_item_id) === f.stock_item_id &&
-    sameDay(s.sold_date, f.created_at)
-  )
+  const idStr = String(f.stock_item_id)  // turn number → string
+
+  // 1) find by exact stock_item_id
+  let sold = soldItems.find(s => s.stock_item_id === idStr)
+
+  // 2) fallback by date + id if needed
+  if (!sold) {
+    sold = soldItems.find(s =>
+      s.stock_item_id === idStr &&
+      sameDay(s.sold_date, f.created_at)
+    )
+  }
 
   return {
     name:   f.product_name,
@@ -376,17 +386,61 @@ const tableRows = filteredFactura.map(f => {
 
 
 
-  // Export PDF handler
+
+// 1) your existing helpers:
+
+// format a Date as "DD.MM"
+function formatDM(d: Date) {
+  const dd = String(d.getDate()).padStart(2, '0')
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  return `${dd}.${mm}`
+}
+
+// build the filename/label pieces
+function getRangeLabel(period: Period): string {
+  const now = new Date()
+
+  switch (period) {
+    case 'day':
+      return formatDM(now)
+    case 'week': {
+      const dayIdx = (now.getDay() + 6) % 7
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayIdx)
+      const end   = new Date(start)
+      end.setDate(start.getDate() + 6)
+      return `${formatDM(start)} - ${formatDM(end)}`
+    }
+    case 'month':
+      // just the month number
+      return String(now.getMonth() + 1).padStart(2, '0')
+    case 'year':
+      return String(now.getFullYear())
+  }
+}
+
+// 2) new helper for the PDF title:
+function getReportTitle(period: Period): string {
+  const label = getRangeLabel(period)
+  return `Raport Vânzari produse ${label}`
+}
+
+// 3) your exportPDF, updated:
 function exportPDF() {
   const doc = new jsPDF()
-  doc.text('Sold Products Report', 14, 20)
+  // use our new title
+  doc.text(getReportTitle(period), 14, 20)
+
   autoTable(doc, {
     startY: 30,
-    head: [['Produs', 'Data', 'Preț (€)', 'Sursă']],
+    head: [['Produs', 'Data', 'Pret(€)', 'Sursa']],
     body: tableRows.map(r => [r.name, r.date, r.price, r.source]),
   })
-  doc.save(`sold_products_${period}.pdf`)
+
+  // and your filename can remain as before
+  const label = getRangeLabel(period).replace(/ /g, '_').replace(/\./g,'-')
+  doc.save(`vanzari_produse_${period}_${label}.pdf`)
 }
+
 
 
   return (

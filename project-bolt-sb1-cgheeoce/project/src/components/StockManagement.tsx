@@ -85,141 +85,173 @@ export default function StockManagement() {
     setShowSaleModal(true)
   }
 
-  // confirm sale
   async function handleSaleConfirm(
-    soldQty:     number,
-    totalPrice:  number,
-    source:      string,
-    totalPieces?: number,
-    allSold:     boolean = true,
-    comment?:    string
-  ) {
-    if (!modalItem) return
+  soldQty:     number,
+  totalPrice:  number,
+  source:      string,
+  totalPieces?: number,
+  allSold:     boolean = true,
+  comment?:    string
+) {
+  if (!modalItem) return
 
-    const isPending = modalCtx === 'pending'
-    const stock_item_id = isPending
-      ? (modalItem as InAsteptareItem).stock_item_id
-      : (modalItem as StockItem).id
+  const isPending = modalCtx === 'pending'
+  const stock_item_id = isPending
+    ? (modalItem as InAsteptareItem).stock_item_id
+    : (modalItem as StockItem).id
 
-    // get current user
-    const { data: auth } = await supabase.auth.getUser()
-    const soldBy = auth.user?.email ?? 'Unknown'
+  // --- insert sold_items & factura logic (unchanged) ---
+  const { data: auth } = await supabase.auth.getUser()
+  const soldBy = auth.user?.email ?? 'Unknown'
 
-    // insert into sold_items
-    const sale: SoldItemInsert = {
-      stock_item_id,
-      name:           (modalItem as any).name || modalItem.description,
-      category:       (modalItem as any).category || '',
-      description:    modalItem.description,
-      unit:           modalItem.unit,
-      quantity_sold:  soldQty,
-      sale_price:     totalPrice,
-      total_value:    totalPrice,
-      sold_by:        soldBy,
-      sold_date:      new Date().toISOString(),
-      sursa:          source,
-    }
-    const { data: ins, error: ie } = await supabase
-      .from('sold_items')
-      .insert([sale])
-      .select('*')
-      .single()
-    if (ie || !ins) {
-      console.error('Sale insert failed:', ie)
-      setShowSaleModal(false)
-      return
-    }
-    setSoldItems(s => [ins, ...s])
+  const sale: SoldItemInsert = {
+    stock_item_id,
+    name:          (modalItem as any).name || modalItem.description,
+    category:      (modalItem as any).category || '',
+    description:   modalItem.description,
+    unit:          modalItem.unit,
+    quantity_sold: soldQty,
+    sale_price:    totalPrice,
+    total_value:   totalPrice,
+    sold_by:       soldBy,
+    sold_date:     new Date().toISOString(),
+    sursa:         source,
+  }
+  const { data: ins, error: ie } = await supabase
+    .from('sold_items')
+    .insert([sale])
+    .select('*')
+    .single()
+  if (ie || !ins) {
+    console.error('Sale insert failed:', ie)
+    setShowSaleModal(false)
+    return
+  }
+  setSoldItems(s => [ins, ...s])
 
-    // also record factura (only for direct stock sales)
-    if (!isPending) {
-      const pretFact = (modalItem as StockItem).value
-      const { error: fe } = await supabase
-        .from('sold_factura')
-        .insert([{
-          stock_item_id,
-          product_name:        modalItem.description,
-          pret_vanzare_factura: pretFact,
-          created_at:          new Date().toISOString(),
-        }])
-      if (fe) console.error('Factura insert failed:', fe)
-    }
+  if (!isPending) {
+    const pretFact = (modalItem as StockItem).value
+    await supabase
+      .from('sold_factura')
+      .insert([{
+        stock_item_id,
+        product_name:        modalItem.description,
+        pret_vanzare_factura: pretFact,
+        created_at:          new Date().toISOString(),
+      }])
+  }
 
-    // adjust stock vs pending
-    if (isPending) {
-      const p = modalItem as InAsteptareItem
-      const newSold    = p.qty_sold + soldQty
-      const newPending = p.qty_total - newSold
+  // --- pending‐sale logic (unchanged) ---
+  if (isPending) {
+    const p = modalItem as InAsteptareItem
+    const newSold    = p.qty_sold + soldQty
+    const newPending = p.qty_total - newSold
 
-      if (newSold >= p.qty_total) {
-        setWaitItems(w => w.filter(x => x.id !== p.id))
-        await supabase.from('in_asteptare').delete().eq('id', p.id)
-      } else {
-        setWaitItems(w =>
-          w.map(x =>
-            x.id === p.id
-              ? { ...x, qty_sold: newSold, qty_pending: newPending }
-              : x
-          )
-        )
-        await supabase
-          .from('in_asteptare')
-          .update({ qty_sold: newSold })
-          .eq('id', p.id)
-      }
-
+    if (newSold >= p.qty_total) {
+      setWaitItems(w => w.filter(x => x.id !== p.id))
+      await supabase.from('in_asteptare').delete().eq('id', p.id)
     } else {
-      const s = modalItem as StockItem
-      const rem = allSold ? s.quantity - soldQty : s.quantity - 1
-
-      if (rem <= 0) {
-        setStockItems(st => st.filter(x => x.id !== s.id))
-        await supabase
-          .from('stock_items')
-          .update({ quantity: 0, value: 0, updated_at: new Date().toISOString() })
-          .eq('id', s.id)
-      } else {
-        setStockItems(st =>
-          st.map(x =>
-            x.id === s.id ? { ...x, quantity: rem } : x
-          )
+      setWaitItems(w =>
+        w.map(x =>
+          x.id === p.id
+            ? { ...x, qty_sold: newSold, qty_pending: newPending }
+            : x
         )
-        await supabase
-          .from('stock_items')
-          .update({
-            quantity:   rem,
-            value:      rem * s.unit_price,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', s.id)
-      }
+      )
+      await supabase
+        .from('in_asteptare')
+        .update({ qty_sold: newSold })
+        .eq('id', p.id)
+    }
 
-      // if partial sale, create pending row
-      if (!allSold && totalPieces !== undefined) {
-        const pending: InAsteptareInsert = {
-          stock_item_id: s.id,
-          description:   s.description,
-          unit:          s.unit,
-          qty_total:     totalPieces,
-          qty_sold:      soldQty,
-          comment:       comment || '',
+  } else {
+    // --- stock‐sale: sequentially drain exactly diff units from first matching rows ---
+    const s      = modalItem as StockItem
+    const diff   = allSold ? soldQty : 1
+    let remaining = diff
+
+    const newStock: StockItem[]      = []
+    const ops: Promise<any>[]        = []
+
+    for (const row of stockItems) {
+      if (
+        row.description === s.description &&
+        row.unit_price  === s.unit_price  &&
+        row.value       === s.value       &&
+        row.unit        === s.unit &&
+        remaining > 0
+      ) {
+        const take   = Math.min(remaining, row.quantity)
+        const newQty = row.quantity - take
+        remaining   -= take
+
+        if (newQty <= 0) {
+          // zero out instead of delete
+          newStock.push({ ...row, quantity: 0, value: 0 })
+          ops.push(
+            Promise.resolve(
+              supabase
+                .from('stock_items')
+                .update({ quantity: 0, value: 0, updated_at: new Date().toISOString() })
+                .eq('id', row.id)
+            )
+          )
+        } else {
+          newStock.push({ ...row, quantity: newQty, value: newQty * row.unit_price })
+          ops.push(
+            Promise.resolve(
+              supabase
+                .from('stock_items')
+                .update({
+                  quantity:   newQty,
+                  value:      newQty * row.unit_price,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', row.id)
+            )
+          )
         }
-        const { data: wIns, error: we } = await supabase
-          .from('in_asteptare')
-          .insert([pending])
-          .select('*')
-          .single()
-        if (we) console.error('Pending insert failed:', we)
-        else setWaitItems(w => [
+      } else {
+        newStock.push(row)
+      }
+    }
+
+    // filter out zeros in UI
+    const filteredStock = newStock.filter(r => r.quantity > 0)
+    setStockItems(filteredStock)
+
+    // apply DB updates
+    await Promise.all(ops)
+
+    // partial‐sale pending insertion
+    if (!allSold && totalPieces !== undefined) {
+      const pending: InAsteptareInsert = {
+        stock_item_id: s.id,
+        description:   s.description,
+        unit:          s.unit,
+        qty_total:     totalPieces,
+        qty_sold:      soldQty,
+        comment:       comment || '',
+      }
+      const { data: wIns, error: we } = await supabase
+        .from('in_asteptare')
+        .insert([pending])
+        .select('*')
+        .single()
+      if (!we) {
+        setWaitItems(w => [
           { ...wIns, qty_pending: wIns.qty_total - wIns.qty_sold },
           ...w,
         ])
       }
     }
-
-    setShowSaleModal(false)
-    setModalItem(null)
   }
+
+  setShowSaleModal(false)
+  setModalItem(null)
+}
+
+
 
   // confirm add-stock
   async function handleAddStock(newStock: StockItemInsert) {
