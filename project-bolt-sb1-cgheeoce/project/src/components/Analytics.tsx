@@ -1,5 +1,7 @@
 // src/components/Analytics.tsx
 import React, { useState, useEffect, useMemo } from 'react'
+import { jsPDF } from 'jspdf'
+import { autoTable } from 'jspdf-autotable'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -64,6 +66,14 @@ export default function Analytics() {
   const [soldItems,  setSales] = useState<SoldItem[]>([])
   const [loading,    setLoading] = useState(true)
   const [period,     setPeriod]  = useState<Period>('day')
+// NEW: fetch factura records so we can get pret_vanzare_factura
+  const [facturaItems, setFactura] = useState<{
+    stock_item_id: number
+    product_name: string
+    pret_vanzare_factura: number
+    created_at: string
+  }[]>([])
+
 
   // fetch + realtime subscribe
   useEffect(() => {
@@ -71,9 +81,18 @@ export default function Analytics() {
       .then(r => r.data && setStock(r.data as StockItem[]))
     supabase.from('sold_items').select('*')
       .then(r => {
-        if (r.data) setSales(r.data as SoldItem[])
+        if (r.data) {
+        console.log('⛳ soldItems payload:', r.data)
+        setSales(r.data as SoldItem[])
+      }
         setLoading(false)
       })
+
+      // NEW: load factura table
+    supabase
+      .from('sold_factura')
+      .select('*')
+      .then(r => r.data && setFactura(r.data))
 
     const channel = supabase
       .channel('analytics-realtime')
@@ -288,7 +307,7 @@ export default function Analytics() {
       transactionsOverTime: txOverTime,
       totalProfit,
     }
-  }, [stockItems, soldItems, period])
+  }, [stockItems, soldItems, facturaItems, period])
 
   if (loading) {
     return (
@@ -311,6 +330,64 @@ export default function Analytics() {
     transactionsOverTime,
     totalProfit,
   } = analytics
+
+
+  // Compute rows for the new table, applying same period filter:
+  const periodStart = (() => {
+    const now = new Date()
+    switch (period) {
+      case 'day':   return new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      case 'week': {
+        const dayIdx = (now.getDay() + 6) % 7
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayIdx)
+      }
+      case 'month': return new Date(now.getFullYear(), now.getMonth(), 1)
+      case 'year':  return new Date(now.getFullYear(), 0, 1)
+    }
+  })()
+
+  const filteredFactura = facturaItems.filter(f => {
+    return new Date(f.created_at) >= periodStart
+  })
+
+function sameDay(a: string, b: string) {
+  const da = new Date(a), db = new Date(b)
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth()    === db.getMonth() &&
+    da.getDate()     === db.getDate()
+  )
+}
+
+const tableRows = filteredFactura.map(f => {
+  const sold = soldItems.find(s =>
+    Number(s.stock_item_id) === f.stock_item_id &&
+    sameDay(s.sold_date, f.created_at)
+  )
+
+  return {
+    name:   f.product_name,
+    date:   new Date(f.created_at).toLocaleDateString(),
+    price:  f.pret_vanzare_factura.toFixed(2),
+    source: sold?.sursa ?? '—',
+  }
+})
+
+
+
+
+  // Export PDF handler
+function exportPDF() {
+  const doc = new jsPDF()
+  doc.text('Sold Products Report', 14, 20)
+  autoTable(doc, {
+    startY: 30,
+    head: [['Produs', 'Data', 'Preț (€)', 'Sursă']],
+    body: tableRows.map(r => [r.name, r.date, r.price, r.source]),
+  })
+  doc.save(`sold_products_${period}.pdf`)
+}
+
 
   return (
     <div className="space-y-8">
@@ -461,6 +538,48 @@ export default function Analytics() {
             </tbody>
           </table>
         </ChartSection>
+      </div>
+
+      {/* ─── Sold Products Table ─────────────────────────────────────────────── */}
+      <div className="bg-white p-4 rounded shadow">
+        <div className="flex justify-between items-center mb-2">
+          <h3 className="text-lg font-medium">Produse Vândute</h3>
+          <button
+            onClick={exportPDF}
+            className="px-3 py-1 bg-blue-600 text-white rounded"
+          >
+            Exportă PDF
+          </button>
+        </div>
+        <div className="overflow-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="p-2 text-left">Produs</th>
+                <th className="p-2 text-left">Data</th>
+                <th className="p-2 text-right">Preț (€)</th>
+                <th className="p-2 text-left">Sursă</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tableRows.map((r, i) => (
+                <tr key={i} className={i % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
+                  <td className="p-2">{r.name}</td>
+                  <td className="p-2">{r.date}</td>
+                  <td className="p-2 text-right">{r.price}</td>
+                  <td className="p-2">{r.source}</td>
+                </tr>
+              ))}
+              {tableRows.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="p-4 text-center text-gray-500">
+                    Nicio vânzare în această perioadă.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   )

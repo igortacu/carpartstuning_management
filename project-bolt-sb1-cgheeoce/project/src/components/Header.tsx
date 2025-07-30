@@ -30,7 +30,7 @@ export default function Header({ currentView, onViewChange, onLogout, userEmail 
               <div className="bg-blue-600 rounded-lg p-2">
                 <Package className="w-6 h-6 text-white" />
               </div>
-              <h1 className="text-xl font-bold text-gray-900">Da iaibu System</h1>
+              <h1 className="text-xl font-bold text-gray-900">Stockzilla</h1>
             </div>
             
             <nav className="flex space-x-4">
@@ -58,7 +58,7 @@ export default function Header({ currentView, onViewChange, onLogout, userEmail 
               className="flex items-center space-x-2 px-4 py-2 text-gray-600 hover:text-red-600 transition-colors"
             >
               <LogOut className="w-4 h-4" />
-              <span>Futeo Nahui</span>
+              <span>Iesi din cont</span>
             </button>
           </div>
         </div>
